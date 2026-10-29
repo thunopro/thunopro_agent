@@ -326,10 +326,7 @@ def infer_kind(text: str, explicit: str | None = None) -> str:
 
 
 def _quality_floor(kind: str, context: str | None = None) -> int:
-    base = 4 if kind in {"reasoning", "review", "long_context"} else 3
-    if context and re.search(r"complex|critical|production|security|high-risk|distributed|deep", context.lower()):
-        base = max(base, 4)
-    return base
+    return 3
 
 
 def _model_performance(model_id: str, kind: str) -> tuple[float, int]:
@@ -654,6 +651,34 @@ def dispatch_task(task_id: str) -> str:
         emit(db, "commander", "task.dispatched", task_id,
              {"agent": task["assigned_agent"], "model": task["selected_model"], "tmux_session": task["tmux_session"], "pane": pane[0]})
     return pane[0]
+
+
+def reconcile_stale(session: str | None = None, max_age_seconds: int = WORKER_TIMEOUT_SECONDS + 300) -> list[str]:
+    """Requeue running tasks whose latest attempt has exceeded the age threshold.
+
+    V1 has no reliable process liveness probe, so this is an explicit, opt-in
+    recovery action rather than an automatic one. Returns requeued task ids.
+    """
+    now = time.time()
+    requeued: list[str] = []
+    with connect() as db:
+        if session:
+            rows = db.execute("SELECT * FROM tasks WHERE status='running' AND tmux_session=?", (session,)).fetchall()
+        else:
+            rows = db.execute("SELECT * FROM tasks WHERE status='running'").fetchall()
+        for row in rows:
+            attempt = db.execute(
+                "SELECT started_at FROM attempts WHERE task_id=? ORDER BY started_at DESC LIMIT 1",
+                (row["id"],)).fetchone()
+            started = float(attempt["started_at"]) if attempt else float(row["updated_at"])
+            if now - started <= max_age_seconds:
+                continue
+            db.execute("UPDATE tasks SET status='queued', result=?, updated_at=? WHERE id=?",
+                       (f"Requeued by reconcile: stale running (age>{int(now-started)}s)", now, row["id"]))
+            emit(db, "commander", "task.requeued_stale", row["id"],
+                 {"age_seconds": int(now - started), "session": row["tmux_session"]})
+            requeued.append(row["id"])
+    return requeued
 
 
 def dispatch_ready(session: str) -> list[str]:

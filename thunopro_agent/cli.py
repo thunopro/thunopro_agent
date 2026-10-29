@@ -7,7 +7,7 @@ import sys
 import time
 from typing import Any
 
-from . import agents, core, orchestrator, scorecard
+from . import agents, context, core, orchestrator, scorecard
 
 
 def out(value: Any) -> None:
@@ -110,6 +110,15 @@ def _handle(args: argparse.Namespace) -> None:
 
     if args.command == "scorecard":
         out(scorecard.compute(args.session or _active_session()))
+        return
+
+    if args.command == "reconcile":
+        out({"requeued": core.reconcile_stale(args.session or _active_session(), args.max_age)})
+        return
+
+    if args.command == "context":
+        session = args.session or _active_session()
+        out(context.snapshot(session, max_chars=args.max_chars))
         return
 
     if args.command == "watch":
@@ -286,6 +295,13 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--max-minutes", type=int, default=45)
     scorecard_parser = commands.add_parser("scorecard", help="Self-score team efficiency from durable evidence")
     scorecard_parser.add_argument("--session")
+    reconcile_parser = commands.add_parser("reconcile", help="Requeue stale running tasks")
+    reconcile_parser.add_argument("--session")
+    reconcile_parser.add_argument("--max-age", type=int, default=core.WORKER_TIMEOUT_SECONDS + 300)
+    context_parser = commands.add_parser("context", help="Print bounded machine/team context snapshot")
+    context_parser.add_argument("--session")
+    context_parser.add_argument("--max-chars", type=int, default=6000)
+
     watch_parser = commands.add_parser("watch", help="Live view of pane states and recent tasks")
     watch_parser.add_argument("--session")
     watch_parser.add_argument("--interval", type=float, default=3.0)
