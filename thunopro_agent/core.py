@@ -720,6 +720,19 @@ def dispatch_ready(session: str) -> list[str]:
     return dispatched
 
 
+def retry_task(task_id: str) -> None:
+    """Requeue a failed task so it can be dispatched again."""
+    with connect() as db:
+        row = db.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not row:
+            raise ValueError(f"Task not found: {task_id}")
+        if row["status"] != "failed":
+            raise ValueError(f"Cannot retry task in status {row['status']}")
+        db.execute("UPDATE tasks SET status='queued', result=NULL, updated_at=? WHERE id=?",
+                   (time.time(), task_id))
+        emit(db, "commander", "task.requeued", task_id, {"previous_status": "failed"})
+
+
 def block_task(task_id: str, reason: str) -> None:
     """Mark a queued task failed because a prerequisite can never be satisfied."""
     with connect() as db:

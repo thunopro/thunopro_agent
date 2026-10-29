@@ -121,6 +121,13 @@ def _handle(args: argparse.Namespace) -> None:
         out(context.snapshot(session, max_chars=args.max_chars))
         return
 
+    if args.command == "logs":
+        path = core.STATE_DIR / "logs" / f"{args.task_id}-{args.attempt}.log"
+        if not path.exists():
+            raise ValueError(f"Log not found: {path}")
+        print(path.read_text(encoding="utf-8", errors="replace"), end="")
+        return
+
     if args.command == "watch":
         session = args.session or _active_session()
         if not session:
@@ -171,6 +178,9 @@ def _handle(args: argparse.Namespace) -> None:
             with core.connect() as db:
                 row = db.execute("SELECT tmux_session FROM tasks WHERE id=?", (args.task_id,)).fetchone()
             out({"task": args.task_id, "pane": pane, "tmux_session": row[0], "status": "dispatched"})
+        elif args.action == "retry":
+            core.retry_task(args.task_id)
+            out({"task": args.task_id, "status": "queued"})
         elif args.action == "evaluate":
             eval_id = core.record_evaluation(args.task_id, args.score, args.outcome, args.notes)
             out({"evaluation": eval_id, "task": args.task_id})
@@ -269,6 +279,8 @@ def parser() -> argparse.ArgumentParser:
     accept.add_argument("--notes", default="")
     dispatch = task_actions.add_parser("dispatch")
     dispatch.add_argument("task_id")
+    retry = task_actions.add_parser("retry")
+    retry.add_argument("task_id")
     evaluate = task_actions.add_parser("evaluate")
     evaluate.add_argument("task_id")
     evaluate.add_argument("--score", type=float, required=True)
@@ -293,6 +305,10 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--session", help="tmux session to drive (defaults to the bound active session)")
     run.add_argument("--model", help="Verified unlimited model for the commander (must be in the unlimited pool)")
     run.add_argument("--max-minutes", type=int, default=45)
+    logs_parser = commands.add_parser("logs", help="Print a worker attempt log")
+    logs_parser.add_argument("task_id")
+    logs_parser.add_argument("--attempt", type=int, default=1)
+
     scorecard_parser = commands.add_parser("scorecard", help="Self-score team efficiency from durable evidence")
     scorecard_parser.add_argument("--session")
     reconcile_parser = commands.add_parser("reconcile", help="Requeue stale running tasks")
